@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>两列瀑布流</title>
+  <style>
+    body, html {
+      margin: 0; padding: 0;
+      font-family: sans-serif;
+      background: #f2f2f2;
+      overscroll-behavior-y: contain;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #pullToRefresh, #pushToLoad {
+      position: fixed;
+      left: 0; right: 0;
+      height: 50px;
+      line-height: 50px;
+      background: #ddd;
+      color: #333;
+      text-align: center;
+      font-size: 16px;
+      z-index: 100;
+      user-select: none;
+      transition: transform 0.3s;
+    }
+
+    #pullToRefresh {
+      top: 0;
+      transform: translateY(-100%);
+    }
+    #pullToRefresh.visible {
+      transform: translateY(0);
+    }
+    #pullToRefresh.loading {
+      background: #bbb;
+      color: #555;
+    }
+
+    #pushToLoad {
+      bottom: 0;
+      transform: translateY(100%);
+    }
+    #pushToLoad.visible {
+      transform: translateY(0);
+    }
+    #pushToLoad.loading {
+      background: #bbb;
+      color: #555;
+    }
+
+    #scrollContainer {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      box-sizing: border-box;
+      margin-top: 50px;  /* 给顶部留出下拉刷新空间 */
+      margin-bottom: 50px; /* 给底部留出上拉加载空间 */
+    }
+
+    .container {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .column {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .item {
+      background: #fff;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+
+    .item img,
+    .item video {
+      width: 100%;
+      display: block;
+    }
+
+    .item p {
+      padding: 8px;
+      font-size: 14px;
+      margin: 0;
+    }
+
+    @media (max-width: 349px) {
+      .container {
+        flex-direction: column;
+      }
+      .column {
+        width: 100%;
+      }
+      #rightColumn {
+        display: none;
+      }
+    }
+
+    @media (min-width: 350px) {
+      .container {
+        flex-direction: row;
+      }
+      .column {
+        width: calc(50% - 5px);
+      }
+      #rightColumn {
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div id="pullToRefresh">↓ 下拉刷新</div>
+<div id="pushToLoad">↑ 上拉加载更多</div>
+
+<div id="scrollContainer">
+  <div class="container">
+    <div id="leftColumn" class="column"></div>
+    <div id="rightColumn" class="column"></div>
+  </div>
+</div>
+
+<script>
+  const API_KEY = 'jbqTeKAE1XdDtMBitabDwimG4HGScs7Tq76jrJDbpTucIlPn55VKvyfo'; // 你的API Key
+  const leftColumn = document.getElementById('leftColumn');
+  const rightColumn = document.getElementById('rightColumn');
+  const pullToRefresh = document.getElementById('pullToRefresh');
+  const pushToLoad = document.getElementById('pushToLoad');
+  const scrollContainer = document.getElementById('scrollContainer');
+
+  let page = 1;
+  let isLoading = false;
+  let isRefreshing = false;
+  let toggle = false;
+
+  // 触摸相关变量
+  let startY = 0;
+  let deltaY = 0;
+  let isAtTop = false;
+  let isAtBottom = false;
+  let pullingDown = false;
+  let pullingUp = false;
+
+  function getShorterColumn() {
+    if (window.innerWidth < 350) {
+      return leftColumn;
+    }
+    toggle = !toggle;
+    return toggle ? leftColumn : rightColumn;
+  }
+
+  async function fetchData(refresh = false) {
+    if (isLoading) return;
+    isLoading = true;
+
+    if (refresh) {
+      isRefreshing = true;
+      pullToRefresh.textContent = '正在刷新...';
+      pullToRefresh.classList.add('loading');
+    } else {
+      pushToLoad.textContent = '正在加载...';
+      pushToLoad.classList.add('loading');
+    }
+
+    try {
+      const [photoRes, videoRes] = await Promise.all([
+        fetch(`https://api.pexels.com/v1/curated?page=${page}&per_page=8`, {
+          headers: { Authorization: API_KEY }
+        }),
+        fetch(`https://api.pexels.com/videos/popular?page=${page}&per_page=4`, {
+          headers: { Authorization: API_KEY }
+        })
+      ]);
+
+      if (!photoRes.ok || !videoRes.ok) throw new Error('网络请求失败');
+
+      const photos = (await photoRes.json()).photos;
+      const videos = (await videoRes.json()).videos;
+      const items = [...photos, ...videos].sort(() => Math.random() - 0.5);
+
+      if (refresh) {
+        leftColumn.innerHTML = '';
+        rightColumn.innerHTML = '';
+        page = 2;
+      } else {
+        page++;
+      }
+
+      if (items.length === 0) {
+        if (refresh) {
+          pullToRefresh.textContent = '没有更多内容';
+        } else {
+          pushToLoad.textContent = '没有更多内容';
+        }
+      } else {
+        items.forEach(item => {
+          const container = document.createElement('div');
+          container.className = 'item';
+
+          if (item.video_files) {
+            const video = document.createElement('video');
+            const videoFile = item.video_files.find(f => f.quality === 'sd') || item.video_files[0];
+            video.src = videoFile.link;
+            video.controls = true;
+            video.playsInline = true;
+            container.appendChild(video);
+          } else {
+            const img = document.createElement('img');
+            img.src = item.src.medium;
+            img.loading = "lazy";
+            container.appendChild(img);
+          }
+
+          const p = document.createElement('p');
+          p.textContent = item.user?.name || '来自 Pexels';
+          container.appendChild(p);
+
+          getShorterColumn().appendChild(container);
+        });
+
+        if (refresh) {
+          pullToRefresh.textContent = '↓ 下拉刷新';
+        } else {
+          pushToLoad.textContent = '↑ 上拉加载更多';
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      if (refresh) {
+        pullToRefresh.textContent = '刷新失败，稍后重试';
+      } else {
+        pushToLoad.textContent = '加载失败，稍后重试';
+      }
+    } finally {
+      if (refresh) {
+        isRefreshing = false;
+        setTimeout(() => {
+          pullToRefresh.classList.remove('visible', 'loading');
+          pullToRefresh.style.transform = 'translateY(-100%)';
+        }, 1000);
+      }
+      if (!refresh) {
+        setTimeout(() => {
+          pushToLoad.classList.remove('visible', 'loading');
+          pushToLoad.style.transform = 'translateY(100%)';
+        }, 1000);
+      }
+      isLoading = false;
+      deltaY = 0;
+      pullingDown = false;
+      pullingUp = false;
+    }
+  }
+
+  // 初次加载
+  fetchData();
+
+  scrollContainer.addEventListener('touchstart', (e) => {
+    if (isLoading) return;
+    startY = e.touches[0].pageY;
+    isAtTop = scrollContainer.scrollTop <= 0;
+    isAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop === scrollContainer.clientHeight;
+    deltaY = 0;
+    pullingDown = false;
+    pullingUp = false;
+  });
+
+  scrollContainer.addEventListener('touchmove', (e) => {
+    if (isLoading) return;
+
+    const currentY = e.touches[0].pageY;
+    deltaY = currentY - startY;
+
+    if (isAtTop && deltaY > 0) {
+      // 下拉刷新逻辑
+      e.preventDefault();
+      pullingDown = true;
+      pullToRefresh.classList.add('visible');
+      const pullDistance = Math.min(deltaY, 100);
+      pullToRefresh.style.transform = `translateY(${pullDistance}px)`;
+      pullToRefresh.textContent = pullDistance > 80 ? '释放刷新' : '↓ 下拉刷新';
+    } else if (isAtBottom && deltaY < 0) {
+      // 上拉加载逻辑
+      e.preventDefault();
+      pullingUp = true;
+      pushToLoad.classList.add('visible');
+      const pullDistance = Math.min(-deltaY, 100);
+      pushToLoad.style.transform = `translateY(${-pullDistance}px)`;
+      pushToLoad.textContent = pullDistance > 80 ? '释放加载' : '↑ 上拉加载更多';
+    }
+  });
+
+  scrollContainer.addEventListener('touchend', (e) => {
+    if (isLoading) return;
+
+    if (pullingDown) {
+      if (deltaY > 80) {
+        pullToRefresh.style.transform = 'translateY(50px)';
+        fetchData(true);
+      } else {
+        pullToRefresh.classList.remove('visible');
+        pullToRefresh.style.transform = 'translateY(-100%)';
+      }
+    } else if (pullingUp) {
+      if (-deltaY > 80) {
+        pushToLoad.style.transform = 'translateY(-50px)';
+        fetchData(false);
+      } else {
+        pushToLoad.classList.remove('visible');
+        pushToLoad.style.transform = 'translateY(100%)';
+      }
+    }
+  });
+</script>
+
+</body>
+</html>
